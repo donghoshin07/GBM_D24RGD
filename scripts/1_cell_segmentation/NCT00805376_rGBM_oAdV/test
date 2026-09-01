@@ -1,1 +1,74 @@
+set -euo pipefail
 
+# 1. Load Modules and Activate the Conda Environment
+module load miniforge3
+eval "$(/risapps/rhel8/miniforge3/24.5.0-0/bin/conda shell.bash hook)"
+conda activate Proseg 
+
+# Set thread count for efficient CPU processing
+export OMP_NUM_THREADS=32
+export MKL_NUM_THREADS=32
+
+# Configuration
+# Set up exact pathwaROOT_DIR=""
+
+# Optional: set to 1 to skip runs where Proseg outputs already exist
+SKIP_IF_EXISTS=1
+
+# 1. SCHEDULE: Increased to improve MCMC convergence for de novo segmentation.
+PROSEG_SCHED="300,300,600" 
+# 2. SHAPE PRIOR: Reduced from default (1.3) to enforce smoother, more compact boundaries, addressing the "Very large number of polygon vertices" warning.
+PERIMETER_BOUND=1.1
+# 3. TRANSCRIPT QUALITY: Standard Xenium filter.
+MIN_TRANSCRIPT_QV=20
+
+echo "Starting ProSeg De Novo Quantification Loop with Optimized Parameters..."
+
+for SUBFOLDER in "$ROOT_DIR"/output-*; do
+    if [ -d "$SUBFOLDER" ]; then
+        SAMPLE_ID=$(basename "$SUBFOLDER")
+        
+        # Define I/O Paths
+        TRANSCRIPTS_FILE="$SUBFOLDER/transcripts.parquet"
+        PROSEG_OUTPUT_DIR="$SUBFOLDER/proseg_denovo_output"
+        
+        # Define critical output file for skipping logic
+        CRITICAL_OUTPUT="$PROSEG_OUTPUT_DIR/cell_by_gene_matrix.csv.gz"
+
+        # Check for necessary input files (only transcripts file is needed)
+        if [ -f "$TRANSCRIPTS_FILE" ]; then
+            
+            if [ "${SKIP_IF_EXISTS}" -eq 1 ] && [ -s "$CRITICAL_OUTPUT" ]; then
+                echo "Skipping $SAMPLE_ID: ProSeg De Novo optimized output already exists and is non-empty."
+                continue
+            fi
+
+            echo "Running ProSeg De Novo for $SAMPLE_ID..."
+            
+            # Ensure output directory exists BEFORE calling ProSeg
+            mkdir -p "$PROSEG_OUTPUT_DIR"
+
+            # 2. Run the ProSeg command
+            proseg \
+                --xenium \
+                --output-path "$PROSEG_OUTPUT_DIR" \
+                --schedule "$PROSEG_SCHED" \
+                --min-qv "$MIN_TRANSCRIPT_QV" \
+                --perimeter-bound "$PERIMETER_BOUND" \
+                --output-expected-counts "cell_by_gene_matrix.csv.gz" \
+                --output-cell-metadata "cell_metadata.csv.gz" \
+                "$TRANSCRIPTS_FILE" 
+
+            # Check the exit status
+            if [ $? -eq 0 ]; then
+                echo "Finished ProSeg De Novo for $SAMPLE_ID successfully. Results in $PROSEG_OUTPUT_DIR"
+            else
+                echo "ERROR running ProSeg De Novo for $SAMPLE_ID"
+            fi
+        else
+            echo "Skipping $SAMPLE_ID: Missing Transcripts file ($TRANSCRIPTS_FILE)."
+        fi
+    fi
+done
+
+echo "All ProSeg De Novo loop finished."
