@@ -2,6 +2,17 @@
 # Figures 2 and S2 analyses using Delta-24-RGD data
 # ==============================================================================
 
+# Expects this script to be located in: /scripts
+#
+# Required input files: 
+# ../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds
+# ../../NCT00805376_rGBM_oAdV/analysis_output/TCR_Diversity_Groups.rds
+# ../../NCT00805376_rGBM_oAdV/clinical_data.csv
+#
+# Output directories:
+# ../../plots
+# ../../output
+
 if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
   try(setwd(dirname(rstudioapi::getActiveDocumentContext()$path)), silent = TRUE)
 }
@@ -30,8 +41,8 @@ suppressPackageStartupMessages({
 
 set.seed(42)
 
-dir.create("../plots",  showWarnings = FALSE)
-dir.create("../output", showWarnings = FALSE)
+dir.create("../../plots",  showWarnings = FALSE)
+dir.create("../../output", showWarnings = FALSE)
 
 # ============================================================
 # Figure settings
@@ -214,17 +225,17 @@ km_cols <- c(
 # ============================================================
 
 xe_global <- readRDS(
-  "../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds"
+  "../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds"
 )
 
 xe_global <- UpdateSeuratObject(xe_global)
 
 div_data <- readRDS(
-  "../NCT00805376_rGBM_oAdV/analysis_output/TCR_Diversity_Groups.rds"
+  "../../NCT00805376_rGBM_oAdV/analysis_output/TCR_Diversity_Groups.rds"
 )
 
 clinical_df <- readr::read_csv(
-  "../NCT00805376_rGBM_oAdV/clinical_data.csv",
+  "../../NCT00805376_rGBM_oAdV/clinical_data.csv",
   show_col_types = FALSE
 )
 
@@ -387,7 +398,7 @@ p_umap <- ggplot(
   )
 
 save_pdf(
-  "../plots/Fig2_UMAP.pdf",
+  "../../plots/Fig2_UMAP.pdf",
   p_umap,
   P_Width,
   P_Height
@@ -446,7 +457,7 @@ p_comp <- ggplot(
   )
 
 save_pdf(
-  "../plots/Fig2_Composition.pdf",
+  "../../plots/Fig2_Composition.pdf",
   p_comp,
   1.3*P_Width,
   P_Height
@@ -575,7 +586,7 @@ p_immune_div <- ggplot(
   )
 
 save_pdf(
-  "../plots/Fig2_ImmuneAbundance_vs_Diversity.pdf",
+  "../../plots/Fig2_ImmuneAbundance_vs_Diversity.pdf",
   p_immune_div,
   0.8*P_Width,
   P_Height
@@ -683,7 +694,7 @@ p_tri_scat <- ggplot(
   )
 
 save_pdf(
-  "../plots/Fig2_Triad_OS_scatter.pdf",
+  "../../plots/Fig2_Triad_OS_scatter.pdf",
   p_tri_scat,
   1.3 * P_Width,
   P_Height
@@ -779,7 +790,7 @@ if (nrow(df_triad_div) >= 3) {
     )
   
   save_pdf(
-    "../plots/Fig2_Triad_Diversity_scatter.pdf",
+    "../../plots/Fig2_Triad_Diversity_scatter.pdf",
     p_triad_div,
     1.3 * P_Width,
     P_Height
@@ -1010,7 +1021,7 @@ p_km <- ggplot() +
   )
 
 save_pdf(
-  "../plots/Fig2_Triad_KM.pdf",
+  "../../plots/Fig2_Triad_KM.pdf",
   p_km,
   1.3 * P_Width,
   P_Height
@@ -1185,7 +1196,7 @@ p_dot <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS2_DotPlot_CellTypeMarkers.pdf",
+  "../../plots/FigS2_DotPlot_CellTypeMarkers.pdf",
   p_dot,
   2 * P_Width,
   P_Height
@@ -1256,7 +1267,7 @@ p_comp_all <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS2_Composition_AllSamples.pdf",
+  "../../plots/FigS2_Composition_AllSamples.pdf",
   p_comp_all,
   2 * P_Width,
   P_Height
@@ -1331,7 +1342,7 @@ p_radius <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS2_Triad_Radius_Sweep.pdf",
+  "../../plots/FigS2_Triad_Radius_Sweep.pdf",
   p_radius,
   P_Width,
   P_Height
@@ -1389,7 +1400,7 @@ p_frac <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS2_Triad_Fraction_Radius_Sweep.pdf",
+  "../../plots/FigS2_Triad_Fraction_Radius_Sweep.pdf",
   p_frac,
   P_Width,
   P_Height
