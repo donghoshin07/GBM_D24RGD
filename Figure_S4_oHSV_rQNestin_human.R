@@ -2,6 +2,15 @@
 # Figure S4 analyses using rQNestin34.5v.2 data
 # ==============================================================================
 
+# Expects this script to be located in: /scripts
+#
+# Required input files: 
+# ../../NCT03152318_rGBM_oHSV/analysis_output/oHSV_Global_with_Harmonized_Labels.rds
+#
+# Output directories:
+# ../../plots
+# ../../output
+
 if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
   try(setwd(dirname(rstudioapi::getActiveDocumentContext()$path)), silent = TRUE)
 }
@@ -24,8 +33,8 @@ suppressPackageStartupMessages({
 })
 
 set.seed(34)
-dir.create("../plots", showWarnings = FALSE)
-dir.create("../output", showWarnings = FALSE)
+dir.create("../../plots", showWarnings = FALSE)
+dir.create("../../output", showWarnings = FALSE)
 
 # ============================================================
 # Figure settings
@@ -108,7 +117,7 @@ TUMOR_LABELS <- c(
 # ============================================================
 
 oHSV_xenium <- readRDS(
-  "../NCT03152318_rGBM_oHSV/analysis_output/oHSV_Global_with_Harmonized_Labels.rds"
+  "../../NCT03152318_rGBM_oHSV/analysis_output/oHSV_Global_with_Harmonized_Labels.rds"
 )
 
 oHSV_xenium <- UpdateSeuratObject(oHSV_xenium)
@@ -429,7 +438,7 @@ triad_summary <- meta %>%
 
 write.csv(
   triad_summary,
-  "../output/Fig3_TriadFraction_BySample.csv",
+  "../../output/Fig3_TriadFraction_BySample.csv",
   row.names = FALSE
 )
 
@@ -547,7 +556,7 @@ p_triad_pair <- p_triad_pair +
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_PRE_POST_TriadFraction.pdf",
+  "../../plots/FigS4_oHSV_PRE_POST_TriadFraction.pdf",
   p_triad_pair,
   P_Width,
   P_Height
@@ -679,7 +688,7 @@ p_struct <- p_struct +
 
 # Save plot
 save_pdf(
-  "../plots/FigS4_oHSV_Myeloid_Distance_to_Vasculature.pdf",
+  "../../plots/FigS4_oHSV_Myeloid_Distance_to_Vasculature.pdf",
   p_struct,
   P_Width,
   P_Height
@@ -688,20 +697,6 @@ save_pdf(
 # ============================================================
 # Triad-associated immune programs
 # ============================================================
-
-# Use linear mixed-effects models (LMMs) to evaluate triad
-# associations, with triad status as a fixed effect and
-# FOV nested within sample as random intercepts.
-#
-# Null hypothesis (H0):
-# β = 0
-#
-# Cells inside triads have the same average module score as
-# cells outside triads.
-#
-# Statistical testing is performed on z-scored module scores.
-# Percent change is calculated from raw module scores for
-# biological interpretation and supplementary reporting.
 
 # Niche labels
 lab_my <- myeloid_niche
@@ -1166,7 +1161,7 @@ final_results <- ext_stats %>%
 
 write.csv(
   final_results,
-  "../output/FigS4_oHSV_Triad_Module_Statistics.csv",
+  "../../output/FigS4_oHSV_Triad_Module_Statistics.csv",
   row.names = FALSE
 )
 
@@ -1359,7 +1354,7 @@ p_module_summary <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_Triad_Immune_Modules.pdf",
+  "../../plots/FigS4_oHSV_Triad_Immune_Modules.pdf",
   p_module_summary,
   1.4 * P_Width,
   P_Height
@@ -1368,20 +1363,6 @@ save_pdf(
 # ============================================================
 # Tumor cells
 # ============================================================
-
-# Use linear mixed-effects models (LMMs) to evaluate
-# triad-associated tumor programs.
-#
-# Null hypothesis (H0):
-# β = 0
-#
-# Tumor cells in regions with higher triad density have the
-# same average module score as tumor cells in regions with
-# lower triad density.
-#
-# Statistical testing is performed on z-scored module scores.
-# Triad density is calculated using a Gaussian kernel density
-# estimate and standardized prior to modeling.
 
 tumor_meta <- meta %>%
   dplyr::filter(
@@ -1520,7 +1501,7 @@ density_summary <- tumor_meta %>%
 
 write.csv(
   density_summary,
-  "../output/FigS4_oHSV_TriadDensity_Summary.csv",
+  "../../output/FigS4_oHSV_TriadDensity_Summary.csv",
   row.names = FALSE
 )
 
@@ -1864,7 +1845,7 @@ tumor_final <- tumor_stats %>%
 
 write.csv(
   tumor_final,
-  "../output/FigS4_oHSV_Tumor_Program_Statistics.csv",
+  "../../output/FigS4_oHSV_Tumor_Program_Statistics.csv",
   row.names = FALSE
 )
 
@@ -1996,9 +1977,6 @@ p_tumor <- ggplot(
       angle = 0
     ),
     
-    axis.text.y = element_text(
-    ),
-    
     axis.text.x = element_blank(),
     
     axis.ticks = element_blank(),
@@ -2024,7 +2002,7 @@ p_tumor <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_Triad_Tumor_Modules.pdf",
+  "../../plots/FigS4_oHSV_Triad_Tumor_Modules.pdf",
   p_tumor,
   1.4 * P_Width,
   P_Height
@@ -2073,7 +2051,7 @@ p_umap <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_UMAP.pdf",
+  "../../plots/FigS4_oHSV_UMAP.pdf",
   p_umap,
   P_Width,
   P_Height
@@ -2244,7 +2222,7 @@ p_dot <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_DotPlot_CellTypeMarkers.pdf",
+  "../../plots/FigS4_oHSV_DotPlot_CellTypeMarkers.pdf",
   p_dot,
   2 * P_Width,
   P_Height
@@ -2320,7 +2298,7 @@ p_comp_all <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_Composition_AllSamples.pdf",
+  "../../plots/FigS4_oHSV_Composition_AllSamples.pdf",
   p_comp_all,
   2 * P_Width,
   P_Height
@@ -2625,9 +2603,6 @@ p_prepost_modules <- ggplot(
       angle = 0
     ),
     
-    axis.text.y = element_text(
-    ),
-    
     axis.text.x = element_blank(),
     
     axis.ticks = element_blank(),
@@ -2653,7 +2628,7 @@ p_prepost_modules <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_PRE_POST_Myeloid_Modules.pdf",
+  "../../plots/FigS4_oHSV_PRE_POST_Myeloid_Modules.pdf",
   p_prepost_modules,
   1.4 * P_Width,
   P_Height
@@ -2662,37 +2637,6 @@ save_pdf(
 # ============================================================
 # Myeloid subtype analysis for triads
 # ============================================================
-
-# Use mixed-effects logistic regression (GLMM) to evaluate
-# myeloid subtype enrichment within triads, with triad status
-# as a fixed effect and FOV nested within sample as random
-# intercepts.
-#
-# Null hypothesis (H0):
-# β = 0
-#
-# The odds of a cell belonging to a given myeloid subtype are
-# the same inside and outside triads.
-#
-# For each subtype, a binary outcome is modeled
-# (subtype vs. all other assigned myeloid cells):
-#
-# logit(P(Subtype)) ~ Triad + (1 | sample_id/FOV)
-#
-# Odds ratios (ORs) are calculated as exp(β):
-#
-# OR > 1 = enrichment within triads
-# OR < 1 = depletion within triads
-# OR = 1 = no association
-#
-# Statistical significance is assessed using Wald tests and
-# corrected for multiple comparisons using the Benjamini-
-# Hochberg false discovery rate (FDR).
-#
-# To assess reproducibility across specimens, sample-level
-# consistency is additionally reported as the number of
-# samples showing enrichment or depletion in the same
-# direction (e.g. 8/11+).
 
 # Define myeloid subtype signatures
 SIG_LIST <- list(
@@ -3030,7 +2974,7 @@ or_tbl <- or_tbl %>%
 
 write.csv(
   or_tbl,
-  "../output/FigS4_oHSV_Myeloid_OR_LMM.csv",
+  "../../output/FigS4_oHSV_Myeloid_OR_LMM.csv",
   row.names = FALSE
 )
 
@@ -3144,7 +3088,7 @@ p_myeloid_or <-
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_Myeloid_OR_Forest.pdf",
+  "../../plots/FigS4_oHSV_Myeloid_OR_Forest.pdf",
   p_myeloid_or,
   P_Width,
   P_Height
@@ -3212,7 +3156,6 @@ dot_df <- myeloid_df %>%
   )
 
 # Scale within gene (same as cell-type marker plot)
-
 dot_df <- dot_df %>%
   
   group_by(Gene) %>%
@@ -3238,7 +3181,7 @@ dot_df$Myeloid_Subtype <- factor(
 
 write.csv(
   dot_df,
-  "../output/FigS4_oHSV_Myeloid_Marker_Dotplot_Data.csv",
+  "../../output/FigS4_oHSV_Myeloid_Marker_Dotplot_Data.csv",
   row.names = FALSE
 )
 
@@ -3325,7 +3268,7 @@ p_dot <- ggplot(
   )
 
 save_pdf(
-  "../plots/FigS4_oHSV_Myeloid_Marker_DotPlot.pdf",
+  "../../plots/FigS4_oHSV_Myeloid_Marker_DotPlot.pdf",
   p_dot,
   1.4 * P_Width,
   P_Height
