@@ -2,7 +2,7 @@
 # Figures 3 and S3 analyses using Delta-24-RGD data
 # ==============================================================================
 
-# Expects this script to be located in: /scripts
+# Expects this script to be located in: /scripts/3_downstream_analyses
 #
 # Required input files: 
 # ../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds
