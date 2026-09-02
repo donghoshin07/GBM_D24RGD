@@ -1,0 +1,141 @@
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(stringr)
+  library(readr)
+})
+
+# CONFIG
+INTEGRATED_RDS <- "analysis_output/Global_Atlas_Res0.1.rds"
+DATA_ROOT      <- "data/Proseg"
+
+OUT_RAW_DIR    <- "objects/per_sample_raw"
+OUT_ANN_DIR    <- "objects/per_sample_annotated"
+OUT_QC_DIR     <- "objects/per_sample_qc"
+LOG_DIR        <- "objects/per_sample_logs"
+
+dir.create(OUT_RAW_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(OUT_ANN_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(OUT_QC_DIR, recursive = TRUE, showWarnings = FALSE)
+dir.create(LOG_DIR, recursive = TRUE, showWarnings = FALSE)
+
+# Load integrated object
+message("Loading integrated object: ", INTEGRATED_RDS)
+xe <- readRDS(INTEGRATED_RDS)
+
+integ_ids <- colnames(xe)
+# Strip suffix: "_1", "_2", etc.
+integ_base <- sub("_[0-9]+$", "", integ_ids)
+
+# Build lookup: base_id -> integrated_id
+lookup <- data.frame(
+  integ = integ_ids,
+  base  = integ_base,
+  stringsAsFactors = FALSE
+)
+
+# Metadata fields to transfer
+candidate_cols <- c("cell_type", "cluster_full", "seurat_clusters",
+                    "Div_Group", "Patient_Match", "Timepoint",
+                    "orig.ident", "Join_ID")
+cols_to_transfer <- intersect(candidate_cols, colnames(xe@meta.data))
+
+# QC: integrated object cells are the pass-QC set
+qc_pass <- integ_ids
+
+# Find Xenium output folders
+folders <- list.dirs(DATA_ROOT, full.names = TRUE, recursive = FALSE)
+
+is_xenium <- function(path) {
+  files <- list.files(path)
+  any(files == "cells.csv") || dir.exists(file.path(path,"cell_feature_matrix"))
+}
+
+# Process each sample
+log_list <- list()
+
+for (f in folders) {
+
+  # Path may be sample or sample/outs
+  data_path <- if (is_xenium(f)) f else file.path(f, "outs")
+  if (!is_xenium(data_path)) next
+
+  sample_name <- basename(f)
+
+  message("")
+  message("=== Processing: ", sample_name, " ===")
+
+  # Load per-sample Xenium
+  obj <- tryCatch({
+    LoadXenium(data.dir = data_path, assay = "Xenium")
+  }, error = function(e) {
+    message("LoadXenium failed: ", e$message)
+    NULL
+  })
+  if (is.null(obj)) next
+
+  obj <- tryCatch(JoinLayers(obj), error = function(e) obj)
+
+  # Add sample fields
+  obj$orig.ident <- sample_name
+
+  per_ids <- colnames(obj)
+
+  # Match
+  matched <- lookup %>% filter(base %in% per_ids)
+
+  match_rate <- nrow(matched) / length(per_ids)
+  message(sprintf("Match rate = %.2f%%", 100*match_rate))
+
+  # Build per-sample QC indicator
+  per_qc <- per_ids %in% matched$base
+  obj$pass_qc_integration <- per_qc
+
+  # Transfer metadata
+  if (nrow(matched) > 0 && length(cols_to_transfer) > 0) {
+    tmp <- xe@meta.data[matched$integ, cols_to_transfer, drop = FALSE]
+    for (col in cols_to_transfer) {
+      
+      # Convert factor to character to prevent integer coercion
+      vals <- tmp[[col]]
+      if (is.factor(vals)) vals <- as.character(vals)
+      
+      # Initialize an empty character vector instead of a logical NA
+      new_col <- rep(NA_character_, length(per_ids))
+      
+      # Assign and save
+      new_col[match(matched$base, per_ids)] <- vals
+      obj@meta.data[[col]] <- new_col
+    }
+  }
+
+  # Save raw
+  raw_fp <- file.path(OUT_RAW_DIR, paste0(sample_name, ".rds"))
+  saveRDS(obj, raw_fp)
+
+  # Save annotated
+  ann_fp <- file.path(OUT_ANN_DIR, paste0(sample_name, ".rds"))
+  saveRDS(obj, ann_fp)
+
+  # Save QC-filtered
+  obj_qc <- subset(obj, subset = pass_qc_integration)
+  qc_fp <- file.path(OUT_QC_DIR, paste0(sample_name, "_QCfiltered.rds"))
+  saveRDS(obj_qc, qc_fp)
+
+  # Log
+  log_list[[length(log_list)+1]] <- data.frame(
+    sample = sample_name,
+    n_raw = length(per_ids),
+    n_matched = nrow(matched),
+    match_rate = match_rate,
+    n_qc = sum(per_qc),
+    stringsAsFactors = FALSE
+  )
+}
+
+log_df <- bind_rows(log_list)
+write_csv(log_df, file.path(LOG_DIR, "project_transfer_log.csv"))
+
+message("")
+message("Done.")
