@@ -1,0 +1,245 @@
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+})
+
+set.seed(28500)
+
+# PATHS
+GLOBAL_RDS <- "analysis_output/Proseg_Xenium_Integrated_oHSV.rds"
+
+IMMUNE_RDS <- "analysis_output/oHSV_Immune_Reclustered.rds"
+
+OUT_DIR  <- "analysis_output"
+PLOT_DIR <- "analysis_plots"
+
+dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
+dir.create(PLOT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+# LOAD GLOBAL
+message("Loading global object...")
+
+obj <- readRDS(GLOBAL_RDS)
+
+DefaultAssay(obj) <- "Xenium"
+
+obj$cluster_full <- as.character(obj$cluster_final)
+
+# LOAD IMMUNE OBJECT
+message("Loading immune object...")
+
+imm <- readRDS(IMMUNE_RDS)
+
+if (!"immune_cluster" %in% colnames(imm@meta.data)) {
+  stop("immune_cluster not found.")
+}
+
+# ATTACH IMMUNE CLUSTERS
+message("Attaching immune labels by barcode...")
+
+ids <- as.character(imm$immune_cluster)
+names(ids) <- colnames(imm)
+
+obj$immune_cluster <- NA_character_
+
+mm <- intersect(
+  colnames(obj),
+  names(ids)
+)
+
+obj$immune_cluster[mm] <- ids[mm]
+
+message(
+  "Attached immune labels to ",
+  sum(!is.na(obj$immune_cluster)),
+  " cells."
+)
+
+# IMMUNE MAJOR
+x <- obj$immune_cluster
+
+immune_major <- rep(
+  NA_character_,
+  length(x)
+)
+
+# true immune
+immune_major[x %in% c("1","2","4")] <- "Myeloid"
+immune_major[x == "3"] <- "Tcell"
+immune_major[x == "6"] <- "Bcell"
+
+# non-immune contaminants recovered from immune reclustering
+immune_major[x == "0"] <- "Astrocytic"
+immune_major[x == "5"] <- "MES_like"
+immune_major[x == "7"] <- "OPC_like"
+
+obj$immune_major <- immune_major
+
+# IMMUNE SUBTYPE
+immune_subtype <- rep(
+  NA_character_,
+  length(x)
+)
+
+immune_subtype[x == "0"] <- "AC_like"
+immune_subtype[x == "1"] <- "SPP1_Mac"
+immune_subtype[x == "2"] <- "APC_TREM2_Mac"
+immune_subtype[x == "3"] <- "T_NK"
+immune_subtype[x == "4"] <- "Activated_APC_Mac"
+immune_subtype[x == "5"] <- "MES_like"
+immune_subtype[x == "6"] <- "B_Plasma"
+immune_subtype[x == "7"] <- "OPC_like"
+
+obj$immune_subtype <- immune_subtype
+
+# HARMONIZED GLOBAL LABELS
+new_names <- c(
+  "0"  = "Astrocytes/AC-like",
+  "1"  = "Myeloid",
+  "2"  = "Oligodendrocytes/OPC-like",
+  "3"  = "Vasculature/Stroma",
+  "4"  = "Oligodendrocytes/OPC-like",
+  "5"  = "MES-like/Hypoxic Tumor",
+  "6"  = "MES-like/Hypoxic Tumor",
+  "7"  = "Neurons",
+  "8"  = "Vasculature/Stroma",
+  "9"  = "Myeloid",
+  "10" = "Myeloid"
+)
+
+obj$final_harmonized_label <-
+  unname(
+    new_names[obj$cluster_full]
+  )
+
+obj$final_harmonized_label[
+  is.na(obj$final_harmonized_label)
+] <- "Other"
+
+# OVERRIDE WITH IMMUNE RECLUSTERING
+# TRUE IMMUNE POPULATIONS
+obj$final_harmonized_label[
+  obj$immune_cluster %in% c("1","2","4")
+] <- "Myeloid"
+
+obj$final_harmonized_label[
+  obj$immune_cluster == "3"
+] <- "T/NK Cells"
+
+obj$final_harmonized_label[
+  obj$immune_cluster == "6"
+] <- "B/Plasma Cells"
+
+# NON-IMMUNE CONTAMINANTS RECOVERED FROM IMMUNE RECLUSTERING
+obj$final_harmonized_label[
+  obj$immune_cluster == "0"
+] <- "Astrocytes/AC-like"
+
+obj$final_harmonized_label[
+  obj$immune_cluster == "5"
+] <- "MES-like/Hypoxic Tumor"
+
+obj$final_harmonized_label[
+  obj$immune_cluster == "7"
+] <- "Oligodendrocytes/OPC-like"
+
+# COLORS
+pal_best <- c(
+
+  "Myeloid"                   = "#D55E00",
+  "Oligodendrocytes/OPC-like" = "#E69F00",
+  "Astrocytes/AC-like"        = "#F0E442",
+  "MES-like/Hypoxic Tumor"    = "#7F7F7F",
+  "Vasculature/Stroma"        = "#0072B2",
+  "T/NK Cells"                = "#009E73",
+  "Neurons"                   = "#7cec37",
+  "B/Plasma Cells"            = "#CC79A7",
+  "Other"                     = "grey80"
+)
+
+present <- unique(
+  obj$final_harmonized_label
+)
+
+pal_use <- pal_best[
+  names(pal_best) %in% present
+]
+
+# QC TABLES
+write.csv(
+  as.data.frame.matrix(
+    table(
+      obj$final_harmonized_label,
+      obj$cluster_full
+    )
+  ),
+  file.path(
+    OUT_DIR,
+    "oHSV_Confusion_Harmonized_vs_Global.csv"
+  )
+)
+
+write.csv(
+  as.data.frame.matrix(
+    table(
+      obj$immune_subtype,
+      obj$cluster_full
+    )
+  ),
+  file.path(
+    OUT_DIR,
+    "oHSV_Confusion_ImmuneSubtype_vs_Global.csv"
+  )
+)
+
+# useful diagnostic table
+write.csv(
+  as.data.frame.matrix(
+    table(
+      obj$immune_cluster,
+      obj$final_harmonized_label
+    )
+  ),
+  file.path(
+    OUT_DIR,
+    "oHSV_ImmuneCluster_vs_FinalLabel.csv"
+  )
+)
+
+# SAVE
+saveRDS(
+  obj,
+  file.path(
+    OUT_DIR,
+    "oHSV_Global_with_Harmonized_Labels.rds"
+  )
+)
+
+write.csv(
+  data.frame(
+    cell = colnames(obj),
+    cluster_full = obj$cluster_full,
+    immune_cluster = obj$immune_cluster,
+    immune_major = obj$immune_major,
+    immune_subtype = obj$immune_subtype,
+    final_harmonized_label = obj$final_harmonized_label,
+    stringsAsFactors = FALSE
+  ),
+  file.path(
+    OUT_DIR,
+    "oHSV_PerCell_Harmonized_Labels.csv"
+  ),
+  row.names = FALSE
+)
+
+message("Done.")
+
+cat("\nFinal labels:\n")
+print(table(obj$final_harmonized_label))
+
+cat("\nImmune cluster -> final label:\n")
+print(table(
+  obj$immune_cluster,
+  obj$final_harmonized_label
+))
