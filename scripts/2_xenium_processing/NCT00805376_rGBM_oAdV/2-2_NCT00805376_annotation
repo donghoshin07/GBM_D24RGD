@@ -1,0 +1,62 @@
+# 1. SETUP & LOAD DATA
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+})
+
+# Load the RDS file (Resolution 0.1)
+print("Loading integrated object (Res 0.1)...")
+xe_combined <- readRDS("analysis_output/Proseg_Xenium_Integrated.rds")
+
+# 2. REMOVE GARBAGE CLUSTERS
+# Clusters 8 had 6 cells and cluster 18 had 1 cell
+print("Removing garbage clusters (8 and 18)...")
+xe_combined <- subset(xe_combined, idents = c("8","18"), invert = TRUE)
+
+# 3. APPLY BIOLOGICAL ANNOTATIONS (RES 0.1)
+print("Applying biological annotations...")
+
+# 8 Broad Clusters:
+new_names <- c(
+  "0" = "Myeloid",                   # CD163, CD74, VSIG4, CSF1R, C1QB
+  "1" = "Oligodendrocytes/OPC-like", # STMN1, MOG, OLIG1, S100B, ERBB3
+  "2" = "Astrocytes/AC-like",        # AQP4, GJA1, ID4, SPARCL1, SOX9
+  "3" = "MES-like/Hypoxic Tumor",    # VEGFA, EGFR, SOX9, CXCL14, JUN
+  "4" = "Vasculature/Stroma",        # FN1, DCN, IGFBP7, ITGA1, RGS5
+  "5" = "T/NK Cells",                # CD2, CD3E, CD8A, IL2RG, CCL5 
+  "6" = "Neurons",                   # SLC17A7, NELL2, FABP3, STMN1, EGR3
+  "7" = "B/Plasma Cells"             # IGKC, IGHG1, IGHGP, JCHAIN, IGHG3
+)
+
+# Apply the new names
+xe_combined <- RenameIdents(xe_combined, new_names)
+
+# Save the annotation into the metadata
+xe_combined$cell_type <- Idents(xe_combined)
+
+# 4. DEFINE COLOR PALETTE
+print("Setting color palette...")
+
+# Custom palette for 8 distinct clusters
+proseg_colors <- c(
+  "Myeloid"                   = "#E31A1C", # Red
+  "Oligodendrocytes/OPC-like" = "#1F78B4", # Dark Blue
+  "Astrocytes/AC-like"        = "#33A02C", # Dark Green
+  "MES-like/Hypoxic Tumor"    = "#6A3D9A", # Purple
+  "Vasculature/Stroma"        = "#FF7F00", # Orange
+  "T/NK Cells"                = "#A6CEE3", # Light Blue
+  "Neurons"                   = "#FDBF6F", # Light Orange
+  "B/Plasma Cells"            = "#FB9A99"  # Pink
+)
+
+# Save palette inside the object
+xe_combined@misc$color_palette <- proseg_colors
+
+# 5. SAVE FINAL OBJECT
+print("Saving final object...")
+
+# Save the cleaned, named, and colored object
+saveRDS(xe_combined, "analysis_output/Global_Atlas_Res0.1.rds")
+
+print("Job Complete!")
