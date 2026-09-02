@@ -1,0 +1,161 @@
+# 1. SETUP & CONFIGURATION
+options(future.globals.maxSize = 8000 * 1024^2)
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(harmony)
+  library(ggplot2)
+  library(dplyr)
+  library(patchwork)
+})
+
+data_dir   <- "data/Proseg"
+output_dir <- "analysis_output"
+plot_dir   <- "analysis_plots"
+
+dir.create(output_dir, showWarnings = FALSE)
+dir.create(plot_dir, showWarnings = FALSE)
+
+# 2. LOAD DATA
+sample_folders <- list.dirs(data_dir, recursive = FALSE, full.names = TRUE)
+seurat_list <- list()
+
+for (folder in sample_folders) {
+  outs_path <- file.path(folder, "outs")
+  
+  if (dir.exists(outs_path)) {
+    sample_name <- basename(folder)
+    
+    tryCatch({
+      obj <- suppressWarnings(LoadXenium(data.dir = outs_path, fov = "fov"))
+      obj$orig.ident <- sample_name
+      seurat_list[[sample_name]] <- obj
+      
+    }, error = function(e) {
+      print(paste("Error loading", sample_name))
+    })
+  }
+}
+
+if (length(seurat_list) == 0) stop("No data found")
+
+# GENE INTERSECTION
+all_genes <- lapply(seurat_list, rownames)
+common_genes <- Reduce(intersect, all_genes)
+
+print(paste("Shared genes:", length(common_genes)))
+
+seurat_list <- lapply(seurat_list, function(x) {
+  subset(x, features = common_genes)
+})
+
+# MERGE
+xe_combined <- merge(seurat_list[[1]], y = seurat_list[-1])
+rm(seurat_list); gc()
+
+# 3. QC
+xe_combined <- subset(xe_combined, subset = nCount_Xenium >= 10)
+print(paste("Cells:", ncol(xe_combined)))
+
+# 4. SKETCH
+DefaultAssay(xe_combined) <- "Xenium"
+
+xe_combined <- NormalizeData(xe_combined, verbose = FALSE)
+xe_combined <- FindVariableFeatures(xe_combined, verbose = FALSE)
+
+xe_combined <- SketchData(
+  object = xe_combined,
+  ncells = 50000,
+  method = "LeverageScore",
+  sketched.assay = "sketch"
+)
+
+# 5. INTEGRATION (HARMONY)
+DefaultAssay(xe_combined) <- "sketch"
+
+xe_combined <- SCTransform(xe_combined, assay = "sketch",
+                          vst.flavor = "v2", verbose = FALSE)
+
+xe_combined <- RunPCA(xe_combined, verbose = FALSE)
+
+xe_combined <- RunHarmony(
+  xe_combined,
+  group.by.vars = "orig.ident",
+  assay.use = "SCT",
+  reduction.use = "pca",
+  verbose = FALSE
+)
+
+# 6. BUILD GRAPH 
+print("Building graph...")
+
+xe_combined <- FindNeighbors(
+  xe_combined,
+  reduction = "harmony",
+  dims = 1:30,
+  graph.name = "sketch_harmony", 
+  verbose = FALSE
+)
+
+# 7. CLUSTER 
+resolution_use <- 0.1   
+
+print(paste("Clustering at resolution:", resolution_use))
+
+xe_combined <- FindClusters(
+  xe_combined,
+  graph.name = "sketch_harmony",  
+  resolution = resolution_use,
+  verbose = FALSE
+)
+
+# 8. UMAP
+xe_combined <- RunUMAP(
+  xe_combined,
+  reduction = "harmony",
+  dims = 1:30,
+  return.model = TRUE,
+  verbose = FALSE
+)
+
+# 9. PROJECT TO FULL DATA
+xe_combined <- ProjectData(
+  object = xe_combined,
+  assay = "Xenium",
+  full.reduction = "pca.full",
+  sketched.assay = "sketch",
+  sketched.reduction = "harmony",
+  umap.model = "umap",
+  dims = 1:30,
+  refdata = list(cluster_final = "seurat_clusters")
+)
+
+Idents(xe_combined) <- "cluster_final"
+
+# 10. JOIN LAYERS FOR MARKERS (FIX)
+DefaultAssay(xe_combined) <- "sketch"
+xe_combined[["sketch"]] <- JoinLayers(xe_combined[["sketch"]])
+
+# 11. FIND MARKERS
+print("Finding markers...")
+
+markers <- FindAllMarkers(
+  xe_combined,
+  only.pos = TRUE,
+  min.pct = 0.25,
+  logfc.threshold = 0.25,
+  verbose = FALSE
+)
+
+if (nrow(markers) > 0) {
+  top20 <- markers %>% group_by(cluster) %>% top_n(20, avg_log2FC)
+  
+  write.csv(top20,
+            file.path(output_dir, "markers_top20.csv"))
+}
+
+# 12. SAVE
+saveRDS(xe_combined,
+        file.path(output_dir, "Proseg_Xenium_Integrated.rds"))
+
+print("DONE")
