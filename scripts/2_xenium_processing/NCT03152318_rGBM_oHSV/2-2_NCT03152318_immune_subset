@@ -1,0 +1,181 @@
+options(future.globals.maxSize = 30000 * 1024^2)
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(dplyr)
+  library(ggplot2)
+  library(future)
+})
+
+plan("sequential")
+
+set.seed(28500)
+
+# INPUT / OUTPUT
+IN_RDS <- "analysis_output/Proseg_Xenium_Integrated_oHSV.rds"
+
+OUT_DIR  <- "analysis_output"
+PLOT_DIR <- "analysis_plots"
+
+dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
+dir.create(PLOT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+# LOAD
+obj <- readRDS(IN_RDS)
+
+Idents(obj) <- "cluster_final"
+
+cat("\nCluster counts:\n")
+print(table(Idents(obj)))
+
+# IMMUNE SUBSET
+IMMUNE_CLUSTERS <- c(
+  "1",   # myeloid
+  "5",   # T/NK/B mixed
+  "9",   # inflammatory myeloid
+  "10"   # CHIT1 myeloid
+)
+
+immune <- subset(
+  obj,
+  idents = IMMUNE_CLUSTERS
+)
+
+cat(
+  "\nImmune cells:",
+  ncol(immune),
+  "\n"
+)
+
+# PREPROCESS FULL IMMUNE OBJECT
+DefaultAssay(immune) <- "Xenium"
+
+immune <- NormalizeData(
+  immune,
+  verbose = FALSE
+)
+
+immune <- FindVariableFeatures(
+  immune,
+  nfeatures = 2000,
+  verbose = FALSE
+)
+
+# SKETCH
+immune <- SketchData(
+  object = immune,
+  ncells = 50000,
+  method = "LeverageScore",
+  sketched.assay = "immune_sketch"
+)
+
+DefaultAssay(immune) <- "immune_sketch"
+
+# SCTransform + PCA
+immune <- SCTransform(
+  immune,
+  assay = "immune_sketch",
+  vst.flavor = "v2",
+  verbose = FALSE
+)
+
+immune <- RunPCA(
+  immune,
+  verbose = FALSE
+)
+
+# CLUSTERING
+immune <- FindNeighbors(
+  immune,
+  dims = 1:30,
+  graph.name = "immune_graph",
+  verbose = FALSE
+)
+
+immune <- FindClusters(
+  immune,
+  graph.name = "immune_graph",
+  resolution = 0.3,
+  verbose = FALSE
+)
+
+immune <- RunUMAP(
+  immune,
+  dims = 1:30,
+  reduction = "pca",
+  return.model = TRUE,
+  verbose = FALSE
+)
+
+# PROJECT LABELS TO FULL IMMUNE DATASET
+immune <- ProjectData(
+  object = immune,
+  assay = "Xenium",
+  full.reduction = "pca.full",
+  sketched.assay = "immune_sketch",
+  sketched.reduction = "pca",
+  umap.model = "umap",
+  dims = 1:30,
+  refdata = list(
+    immune_cluster = "seurat_clusters"
+  )
+)
+
+Idents(immune) <- "immune_cluster"
+
+# JOIN LAYERS
+DefaultAssay(immune) <- "immune_sketch"
+
+immune[["immune_sketch"]] <- JoinLayers(
+  immune[["immune_sketch"]]
+)
+
+# MARKERS
+markers <- FindAllMarkers(
+  immune,
+  only.pos = TRUE,
+  min.pct = 0.20,
+  logfc.threshold = 0.25,
+  verbose = FALSE
+)
+
+write.csv(
+  markers,
+  file.path(
+    OUT_DIR,
+    "Immune_Markers_All.csv"
+  ),
+  row.names = FALSE
+)
+
+if(nrow(markers) > 0) {
+
+  top20 <- markers %>%
+    group_by(cluster) %>%
+    slice_max(
+      avg_log2FC,
+      n = 20,
+      with_ties = FALSE
+    ) %>%
+    ungroup()
+
+  write.csv(
+    top20,
+    file.path(
+      OUT_DIR,
+      "Immune_Markers_Top20.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+# SAVE
+saveRDS(
+  immune,
+  file.path(
+    OUT_DIR,
+    "oHSV_Immune_Reclustered.rds"
+  )
+)
+
+cat("\nDONE\n")
