@@ -1,0 +1,52 @@
+
+set -euo pipefail
+
+# Load environment
+module load miniforge3
+eval "$(/risapps/rhel8/miniforge3/24.5.0-0/bin/conda shell.bash hook)"
+conda activate Proseg
+module load xeniumranger/4.0.0
+
+# Paths (Set actual paths!)
+BASE_DIR=
+TOOL_DIR=
+PROSEG_TO_BAYSOR=
+PROSEG_ZARR="proseg_denovo_output"
+
+# Loop through all Xenium runs
+find "$BASE_DIR" -maxdepth 1 -type d -name "output-*" | sort | while read -r RUN_DIR; do
+  RUN_NAME=$(basename "$RUN_DIR")
+  echo "Processing: $RUN_NAME"
+
+  # Check for Proseg output
+  if [ ! -d "$RUN_DIR/$PROSEG_ZARR" ]; then
+    echo "  Skipping: No $PROSEG_ZARR found."
+    continue
+  fi
+
+  # Define paths
+  EXPLORER_DIR="$RUN_DIR/explorer_import"
+  mkdir -p "$EXPLORER_DIR"
+
+  POLYGONS="$EXPLORER_DIR/baysor-cell-polygons.geojson"
+  TRANSCRIPTS="$EXPLORER_DIR/baysor-transcript-metadata.csv"
+
+  # Step 1: Convert Proseg output to Baysor format
+  "$PROSEG_TO_BAYSOR" \
+    --output-transcript-metadata "$TRANSCRIPTS" \
+    --output-cell-polygons "$POLYGONS" \
+    "$RUN_DIR/$PROSEG_ZARR/transcript-metadata.csv.gz" \
+    "$RUN_DIR/$PROSEG_ZARR/cell-polygons.geojson.gz"
+
+  # Step 2: Import into Xenium Ranger (assumes coordinates are already in microns)
+  xeniumranger import-segmentation \
+    --id "import_segmentation_${RUN_NAME}" \
+    --xenium-bundle "$RUN_DIR" \
+    --viz-polygons "$POLYGONS" \
+    --transcript-assignment "$TRANSCRIPTS" \
+    --units=microns
+
+  echo "  Done: Imported segmentation for $RUN_NAME"
+done
+
+echo "All runs processed."
