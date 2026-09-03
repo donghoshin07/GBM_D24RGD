@@ -1,0 +1,54 @@
+# 1. SETUP
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+})
+
+output_dir <- "analysis_output_hamster_terminal_28488"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Load the object
+print("Loading integrated object...")
+obj <- readRDS("analysis_output_hamster_terminal_28488/Hamster_Terminal_0028488_Final.rds")
+
+# 2. FIND MARKERS (per cluster on sketch assay)
+message("--- Finding Markers (per cluster) ---")
+
+DefaultAssay(obj) <- "sketch"
+
+obj$cluster_full <- as.character(obj$cluster_full)
+obj$cluster_full[is.na(obj$cluster_full)] <- "unassigned"
+obj$cluster_full <- factor(obj$cluster_full)
+Idents(obj) <- "cluster_full"
+
+# Drop the "unassigned" group for marker finding
+obj_markers <- subset(obj, idents = setdiff(levels(obj), "unassigned"))
+
+# Parameters:
+markers <- FindAllMarkers(
+  object          = obj_markers,
+  assay           = "sketch",
+  only.pos        = TRUE,
+  min.pct         = 0.25,
+  logfc.threshold = 0.25,
+  verbose         = FALSE
+)
+
+# Save full table + top 20 per cluster
+if (nrow(markers) > 0) {
+  markers <- markers %>% arrange(cluster, desc(avg_log2FC))
+  top20   <- markers %>% group_by(cluster) %>% slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE)
+
+  message("Example top markers:")
+  print(head(top20, 20))
+
+  out_all <- file.path(output_dir, "Cluster_Markers_res0.2_All.csv")
+  out_top <- file.path(output_dir, "Cluster_Markers_res0.2_Top20.csv")
+  write.csv(markers, out_all, row.names = FALSE)
+  write.csv(top20, out_top, row.names = FALSE)
+
+  message("Saved: ", out_top, " and ", out_all)
+} else {
+  message("No markers found at the current thresholds.")
+}
