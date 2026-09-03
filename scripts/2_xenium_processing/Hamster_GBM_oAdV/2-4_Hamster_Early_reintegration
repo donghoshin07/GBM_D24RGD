@@ -1,0 +1,131 @@
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+})
+
+set.seed(28500)
+
+# Paths
+IN_RDS_GLOBAL    <- "analysis_output_hamster_early_28500/Hamster_TMA_0028500_Final.rds"
+IMMUNE_SUBSET_RDS <- "analysis_output_hamster_early_28500/Immune_Subset_unsupervised_with_res_sweep.rds"
+
+OUT_DIR  <- "analysis_output_hamster_early_28500"
+PLOT_DIR <- "analysis_plots_hamster_early_28500"
+
+dir.create(OUT_DIR,  showWarnings = FALSE, recursive = TRUE)
+dir.create(PLOT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+# Load objects
+obj     <- readRDS(IN_RDS_GLOBAL)
+imm_obj <- readRDS(IMMUNE_SUBSET_RDS)
+
+DefaultAssay(obj) <- "Xenium"
+
+obj$cluster_full <- as.character(obj$cluster_full)
+
+# Attach immune_res0_1
+ids <- as.character(imm_obj$cluster_res0_1)
+names(ids) <- colnames(imm_obj)
+
+obj$immune_res0_1 <- NA_character_
+
+common_cells <- intersect(colnames(obj), names(ids))
+obj$immune_res0_1[common_cells] <- ids[common_cells]
+
+# Immune major labels
+obj$immune_major <- NA_character_
+
+obj$immune_major[obj$immune_res0_1 %in% c("0","5")] <- "Myeloid"
+obj$immune_major[obj$immune_res0_1 == "2"] <- "Tcell"
+obj$immune_major[obj$immune_res0_1 == "3"] <- "Bcell"
+
+# Global annotations
+map_global <- c(
+  "0" = "OPC_like_or_Tumor_progenitor",
+  "1" = "Myeloid",
+  "2" = "Endothelial",
+  "3" = "Oligodendrocyte",
+  "4" = "Neuron",
+  "5" = "Astrocyte_AC_like",
+  "6" = "Neuron",
+  "7" = "Ependymal_CP_like",
+  "8" = "B_Plasma",
+  "9" = "Fibroblast_Mesenchymal"
+)
+
+base <- unname(map_global[obj$cluster_full])
+
+# Harmonized labels
+harm <- rep(NA_character_, length(base))
+
+# immune override
+harm[obj$immune_major == "Myeloid"] <- "Myeloid"
+harm[obj$immune_major == "Tcell"]   <- "T/NK Cells"
+harm[obj$immune_major == "Bcell"]   <- "B/Plasma Cells"
+
+# non-immune annotations
+harm[is.na(harm) &
+       base %in% c("OPC_like_or_Tumor_progenitor",
+                   "Oligodendrocyte")] <-
+  "Oligodendrocytes/OPC-like"
+
+harm[is.na(harm) &
+       base == "Astrocyte_AC_like"] <-
+  "Astrocytes/AC-like"
+
+harm[is.na(harm) &
+       base == "Neuron"] <-
+  "Neurons"
+
+harm[is.na(harm) &
+       base %in% c("Endothelial",
+                   "Fibroblast_Mesenchymal",
+                   "Ependymal_CP_like")] <-
+  "Vasculature/Stroma"
+
+harm[is.na(harm) &
+       base == "B_Plasma"] <-
+  "B/Plasma Cells"
+
+# rescue globally myeloid cells
+harm[is.na(harm) &
+       base == "Myeloid"] <-
+  "Myeloid"
+
+harm[is.na(harm)] <- "Other"
+
+obj$final_harmonized_label <- harm
+
+# Colors
+pal_best <- c(
+  "Myeloid"                   = "#D55E00",
+  "Oligodendrocytes/OPC-like" = "#E69F00",
+  "Astrocytes/AC-like"        = "#F0E442",
+  "MES-like/Hypoxic Tumor"    = "#7F7F7F",
+  "Vasculature/Stroma"        = "#0072B2",
+  "T/NK Cells"                = "#009E73",
+  "Neurons"                   = "#7CEC37",
+  "B/Plasma Cells"            = "#CC79A7",
+  "Other"                     = "grey80"
+)
+
+present <- sort(unique(obj$final_harmonized_label))
+pal_use <- pal_best[names(pal_best) %in% present]
+
+obj$final_harmonized_label <- factor(
+  obj$final_harmonized_label,
+  levels = present
+)
+
+# Save 
+saveRDS(
+  obj,
+  file = file.path(
+    OUT_DIR,
+    "Global_with_final_harmonized_labels_28500.rds"
+  )
+)
+
+cat("\nFinal labels:\n")
+print(table(obj$final_harmonized_label))
