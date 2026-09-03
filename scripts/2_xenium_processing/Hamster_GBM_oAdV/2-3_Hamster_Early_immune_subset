@@ -1,0 +1,209 @@
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+})
+
+set.seed(28500)
+
+# Parameters
+IN_RDS   <- "analysis_output_hamster_early_28500/Hamster_TMA_0028500_Final.rds"
+if (!file.exists(IN_RDS) && file.exists("Hamster_TMA_0028500_Final.rds")) {
+  IN_RDS <- "Hamster_TMA_0028500_Final.rds"
+}
+
+OUT_DIR  <- "analysis_output_hamster_early_28500"
+PLOT_DIR <- "analysis_plots_hamster_early_28500"
+RES_LIST <- c(0.1, 0.2, 0.3)
+IMMUNE_CLUSTERS <- c("1", "8")
+INCLUDE_TCORE <- FALSE  
+
+dir.create(OUT_DIR,  showWarnings = FALSE, recursive = TRUE)
+dir.create(PLOT_DIR, showWarnings = FALSE, recursive = TRUE)
+
+cat(sprintf("Input: %s\nOutput: %s\nPlots: %s\nResolutions: %s\nImmune clusters: %s\nINCLUDE_TCORE: %s\n",
+            IN_RDS, OUT_DIR, PLOT_DIR,
+            paste(RES_LIST, collapse = ", "),
+            paste(IMMUNE_CLUSTERS, collapse = ", "),
+            INCLUDE_TCORE))
+
+# Helpers
+`%||%` <- function(a, b) if (!is.null(a) && length(a) > 0) a else b
+
+get_counts <- function(obj) {
+  out <- tryCatch(GetAssayData(obj, layer = "counts"),
+                  error = function(e) NULL)
+  if (is.null(out)) out <- GetAssayData(obj, slot = "counts")
+  out
+}
+
+safe_head_print <- function(df, n = 10, msg = NULL) {
+  if (!is.null(msg)) message(msg)
+  if (!is.null(df) && nrow(df) > 0) {
+    print(utils::head(df, n))
+  } else {
+    message("  (no rows)")
+  }
+}
+
+compute_Tcore <- function(obj) {
+  DefaultAssay(obj) <- "Xenium"
+  feats_present <- rownames(obj)
+
+  t_core_genes <- intersect(c("Cd3d","Cd3e","Cd3g","Cd247","Trac"), feats_present)
+  t_sub_genes  <- intersect(c("Cd4","Cd8a","Cd8b1"), feats_present)
+  t_cyt_genes  <- intersect(c("Prf1","Nkg7","Gzmb"), feats_present)
+  b_genes      <- intersect(c("Ighg2","Ighg3","Jchain","Mzb1","Cd79a","Pou2af1","Xbp1"), feats_present)
+
+  genes_used <- unique(c(t_core_genes, t_sub_genes, t_cyt_genes, b_genes))
+  if (length(genes_used) == 0) return(rep(FALSE, ncol(obj)))
+
+  counts <- get_counts(obj)
+  det <- counts[genes_used, , drop = FALSE] > 0
+
+  core_hits <- if (length(t_core_genes)) Matrix::colSums(det[t_core_genes, , drop = FALSE]) else rep(0, ncol(obj))
+  sub_hits  <- if (length(t_sub_genes))  Matrix::colSums(det[t_sub_genes,  , drop = FALSE]) else rep(0, ncol(obj))
+  cyt_hits  <- if (length(t_cyt_genes))  Matrix::colSums(det[t_cyt_genes,  , drop = FALSE]) else rep(0, ncol(obj))
+  b_hits    <- if (length(b_genes))      Matrix::colSums(det[b_genes,      , drop = FALSE]) else rep(0, ncol(obj))
+
+  has_2_cd3    <- core_hits >= 2
+  cd3_plus_sub <- (core_hits >= 1) & (sub_hits >= 1)
+  cd3_plus_cyt <- (core_hits >= 1) & (cyt_hits >= 1)
+
+  t_core_pos <- (has_2_cd3 | cd3_plus_sub | cd3_plus_cyt) & !(b_hits >= 1)
+  t_core_pos
+}
+
+rank_clusters_by_Tmarkers <- function(obj, cluster_col, t_markers) {
+  DefaultAssay(obj) <- "Xenium"
+  if (length(t_markers) == 0) {
+    return(data.frame(cluster = character(0), n = integer(0), T = integer(0), pct = numeric(0)))
+  }
+  counts <- get_counts(obj)
+  det <- counts[t_markers, , drop = FALSE] > 0
+  T_any <- Matrix::colSums(det) > 0
+
+  md <- obj@meta.data
+  md$T_any <- T_any
+  md$cluster_tmp <- md[[cluster_col]]
+
+  rk <- aggregate(
+    T_any ~ cluster_tmp,
+    data = md,
+    FUN = function(x) c(n = length(x), T = sum(x), pct = round(100 * mean(x), 2))
+  )
+  rk$n   <- rk$T_any[, "n"]
+  rk$T   <- rk$T_any[, "T"]
+  rk$pct <- rk$T_any[, "pct"]
+  rk$T_any <- NULL
+  colnames(rk)[1] <- "cluster"
+  rk <- rk[order(-rk$pct, -rk$T), ]
+  rk
+}
+
+# Load object 
+message("[1/5] Loading object...")
+obj <- readRDS(IN_RDS)
+stopifnot("Xenium" %in% Assays(obj))
+DefaultAssay(obj) <- "Xenium"
+if (!"cluster_full" %in% colnames(obj@meta.data)) {
+  obj$cluster_full <- as.character(Idents(obj))
+}
+
+# Define immune subset
+message("[2/5] Defining immune candidates (CD45+ or global immune-like clusters 1/8)...")
+
+counts <- get_counts(obj)
+cd45_pos <- if ("Ptprc" %in% rownames(obj)) (counts["Ptprc", ] > 0) else rep(FALSE, ncol(obj))
+immune_by_label <- obj$cluster_full %in% IMMUNE_CLUSTERS
+
+immune_cand <- cd45_pos | immune_by_label
+
+if (INCLUDE_TCORE) {
+  message("  INCLUDE_TCORE=TRUE -> computing T_core to widen immune subsetting.")
+  obj$T_core <- compute_Tcore(obj)
+  immune_cand <- immune_cand | obj$T_core
+}
+
+message(sprintf("  Immune candidate cells: %d (%.2f%% of total)",
+                sum(immune_cand), 100 * mean(immune_cand)))
+if (sum(immune_cand) < 200) warning("Immune subset has < 200 cells; clustering may be unstable.")
+
+immune <- subset(obj, cells = colnames(obj)[immune_cand])
+
+# Preprocess immune subset
+message("[3/5] Preprocessing immune subset (Normalize -> HVG -> Scale -> PCA -> UMAP)...")
+DefaultAssay(immune) <- "Xenium"
+immune <- NormalizeData(immune, verbose = FALSE)
+immune <- FindVariableFeatures(immune, nfeatures = 2000, verbose = FALSE)
+immune <- ScaleData(immune, verbose = FALSE)
+immune <- RunPCA(immune, npcs = 30, verbose = FALSE)
+
+dims_use <- 1:min(30, max(10, ncol(immune[["pca"]])))
+immune <- RunUMAP(immune, dims = dims_use, verbose = FALSE)
+immune <- FindNeighbors(immune, dims = dims_use, verbose = FALSE)
+
+# T marker set (for reporting, not for clustering)
+t_markers <- intersect(c("Cd3d","Cd3e","Cd3g","Cd247","Trac","Cd4","Cd8a","Prf1","Nkg7","Gzmb"),
+                       rownames(immune))
+
+# Resolution sweep
+message("[4/5] Clustering at multiple resolutions and saving outputs...")
+
+for (res in RES_LIST) {
+  res_str <- gsub("\\.", "_", as.character(res))
+  cluster_col <- paste0("cluster_res", res_str)
+  message(sprintf("  - Resolution = %s", as.character(res)))
+
+  immune <- FindClusters(immune, resolution = res, verbose = FALSE)
+
+  # Store identities to metadata column
+  immune[[cluster_col]] <- Idents(immune)
+
+  # Rank clusters by T markers
+  rk <- rank_clusters_by_Tmarkers(immune, cluster_col, t_markers)
+  safe_head_print(rk, 10, msg = sprintf("    Top T-marker-enriched clusters (res=%s):", as.character(res)))
+  utils::write.csv(rk, file.path(OUT_DIR, sprintf("Immune_Tmarker_enrichment_res%s.csv", res_str)), row.names = FALSE)
+
+  # Set identities from metadata column safely
+  immune <- SetIdent(immune, value = cluster_col)
+
+  # Marker discovery
+  imm_markers <- FindAllMarkers(
+    immune,
+    only.pos        = TRUE,
+    min.pct         = 0.20,
+    logfc.threshold = 0.25,
+    verbose         = FALSE
+  )
+
+  if (!is.null(imm_markers) && nrow(imm_markers) > 0) {
+    imm_markers <- imm_markers %>% arrange(cluster, desc(avg_log2FC))
+    safe_head_print(imm_markers, 10, msg = sprintf("    Marker preview (res=%s):", as.character(res)))
+
+    utils::write.csv(
+      imm_markers,
+      file.path(OUT_DIR, sprintf("Immune_Subset_Markers_res%s_All.csv", res_str)),
+      row.names = FALSE
+    )
+
+    top20 <- imm_markers %>%
+      group_by(cluster) %>%
+      slice_max(order_by = avg_log2FC, n = 20, with_ties = FALSE) %>%
+      ungroup()
+
+    utils::write.csv(
+      top20,
+      file.path(OUT_DIR, sprintf("Immune_Subset_Markers_res%s_Top20.csv", res_str)),
+      row.names = FALSE
+    )
+  } else {
+    message("    No markers found at this threshold.")
+  }
+}
+
+# Save immune subset object
+message("[5/5] Saving immune subset object with cluster columns...")
+saveRDS(immune, file.path(OUT_DIR, "Immune_Subset_unsupervised_with_res_sweep.rds"))
+
+message("Complete.")
