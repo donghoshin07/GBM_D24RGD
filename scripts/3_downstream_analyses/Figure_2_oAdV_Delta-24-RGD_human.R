@@ -14,6 +14,8 @@
 # Output directories:
 # ../../plots
 # ../../output
+#
+# Note: P20 excluded due to clinical consierations (J Clin Oncol., 2018)
 
 if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
   try(setwd(dirname(rstudioapi::getActiveDocumentContext()$path)), silent = TRUE)
