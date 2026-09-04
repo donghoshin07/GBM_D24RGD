@@ -1,5 +1,5 @@
 # ==============================================================================
-# Figures 4 analysis using Delta-24-RGD data
+# Figure 4 analysis using Delta-24-RGD data
 # ==============================================================================
 
 # Expects this script to be located in: /scripts/3_downstream_analyses
@@ -7,7 +7,6 @@
 # Required input files: 
 # ../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds
 # ../../output/probe_table_all_samples_with_SNR.csv
-# ../../output/high_confidence_TCR_probes.csv
 # ../../objects/per_sample_annotated/*.rds
 #
 # Output directories:
@@ -125,9 +124,6 @@ SEURAT_DIR <- "../../objects/per_sample_annotated"
 VALID_ALL_CSV <-
   "../../output/probe_table_all_samples_with_SNR.csv"
 
-VALID_HIGH_CSV <-
-  "../../output/high_confidence_TCR_probes.csv"
-
 CACHE_FILE <-
   "../../output/Fig4_Clonotype_APC_Cache.rds"
 
@@ -160,11 +156,6 @@ DefaultAssay(
 
 valid_all <- read.csv(
   VALID_ALL_CSV,
-  stringsAsFactors = FALSE
-)
-
-valid_high <- read.csv(
-  VALID_HIGH_CSV,
   stringsAsFactors = FALSE
 )
 
@@ -221,61 +212,6 @@ extract_core_sample <- function(s) {
     tolower(parts[2])
   )
 }
-
-# ============================================================
-# Probe validation tables
-# ============================================================
-
-valid_high <- valid_high %>%
-  mutate(
-    Probe_Prefix =
-      stringr::str_extract(
-        Probe,
-        "(?i)P\\d+"
-      ),
-    
-    Sample_Prefix =
-      stringr::str_extract(
-        Sample,
-        "(?i)P\\d+"
-      )
-  ) %>%
-  filter(
-    toupper(Probe_Prefix) ==
-      toupper(Sample_Prefix)
-  )
-
-valid_high$Probe_Clean <- gsub(
-  "_",
-  "-",
-  valid_high$Probe
-)
-
-valid_high$Sample_Core <- vapply(
-  valid_high$Sample,
-  extract_core_sample,
-  character(1)
-)
-
-thr_tbl_all <- valid_high %>%
-  dplyr::group_by(
-    Sample_Core,
-    Probe_Clean
-  ) %>%
-  dplyr::summarise(
-    Thr = max(Thr, na.rm = TRUE),
-    .groups = "drop"
-  ) %>%
-  dplyr::mutate(
-    Thr = ifelse(
-      is.finite(Thr),
-      Thr,
-      1
-    )
-  ) %>%
-  dplyr::rename(
-    Probe = Probe_Clean
-  )
 
 # ============================================================
 # Build metadata with coordinates
@@ -839,17 +775,7 @@ for (f in files) {
     if (!pr %in% rownames(mat))
       next
     
-    thr_row <- thr_tbl_all %>%
-      dplyr::filter(
-        Sample_Core == sample_core,
-        Probe == pr
-      )
-    
-    thr <- ifelse(
-      nrow(thr_row) > 0,
-      max(thr_row$Thr, na.rm = TRUE),
-      1
-    )
+    thr <- 1
     
     vals <- as.numeric(
       mat[pr, t_cells]
