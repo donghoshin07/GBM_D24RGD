@@ -6,7 +6,7 @@
 #
 # Required input files: 
 # ../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds
-# ../../NCT00805376_rGBM_oAdV/analysis_output/TCR_Diversity_Groups.rds
+# ../../output/TCR_Diversity_Groups.rds
 # ../../NCT00805376_rGBM_oAdV/clinical_data.csv
 #
 # Output directories:
@@ -231,7 +231,7 @@ xe_global <- readRDS(
 xe_global <- UpdateSeuratObject(xe_global)
 
 div_data <- readRDS(
-  "../../NCT00805376_rGBM_oAdV/analysis_output/TCR_Diversity_Groups.rds"
+  "../../output/TCR_Diversity_Groups.rds"
 )
 
 clinical_df <- readr::read_csv(
