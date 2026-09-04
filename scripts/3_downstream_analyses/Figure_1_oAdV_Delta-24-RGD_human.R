@@ -5,11 +5,18 @@
 # Expects this script to be located in: /scripts/3_downstream_analyses
 #
 # Required input files: 
+# TCR CDR3b sequencing files can be found: GEO: GSE330794
+# Clinical data can be found: Lang et al. JCO, 2018 (PMID:29432077, PMCID:PMC6075856)
 # ../../input/TCR/patient/*.txt
 #
 # Output directories:
 # ../../plots
 # ../../output
+#
+# Output files:
+# ../../output/TRB_Diversity_N100.rds
+# ../../output/TCR_Diversity_Groups.rds
+# other output files and plots
 
 if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
   try(setwd(dirname(rstudioapi::getActiveDocumentContext()$path)), silent = TRUE)
