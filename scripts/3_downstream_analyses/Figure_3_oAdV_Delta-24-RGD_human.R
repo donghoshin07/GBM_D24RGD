@@ -5,6 +5,8 @@
 # Expects this script to be located in: /scripts/3_downstream_analyses
 #
 # Required input files: 
+# Xenium files can be found: GEO: GSE330794
+# Clinical data can be found: Lang et al. J Clin Oncol., 2018 (PMID:29432077, PMCID:PMC6075856)
 # ../../NCT00805376_rGBM_oAdV/analysis_output/Global_Atlas_Res0.1.rds
 # ../../NCT00805376_rGBM_oAdV/clinical_data.csv
 #
