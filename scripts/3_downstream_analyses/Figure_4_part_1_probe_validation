@@ -1,0 +1,542 @@
+# ==============================================================================
+# Figure 4 probe validation
+# ==============================================================================
+
+if (requireNamespace("rstudioapi", quietly = TRUE) &&
+    rstudioapi::isAvailable()) {
+  setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+}
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(SeuratObject)
+  library(dplyr)
+  library(tidyr)
+  library(tibble)
+  library(readr)
+  library(stringr)
+  library(Matrix)
+})
+
+set.seed(42)
+
+OUT_DIR <- "../../output"
+dir.create(OUT_DIR, showWarnings = FALSE)
+
+IN_DIR <- "../../objects/per_sample_qc/"
+PATTERN <- "*.rds"
+
+PROBE_REGEX <- "P\\d+-post-clonotype\\d+"
+
+FIXED_THRESHOLD <- 1
+N_T_POS_MIN <- 3
+FDR_MAX <- 0.05
+
+PREFERRED_LABEL_COLS <- "cell_type"
+
+msg <- function(...) {
+  cat(
+    sprintf(
+      "[%s] %s\n",
+      format(Sys.time(), "%H:%M:%S"),
+      sprintf(...)
+    )
+  )
+}
+
+is_T_mask <- function(label_vec) {
+  label_vec == "T/NK Cells"
+}
+
+find_text_label_col <- function(meta,
+                                prefer = PREFERRED_LABEL_COLS) {
+  
+  for (nm in prefer) {
+    if (nm %in% colnames(meta)) {
+      vals <- as.character(meta[[nm]])
+      
+      if (any(is_T_mask(vals))) {
+        return(nm)
+      }
+    }
+  }
+  
+  NULL
+}
+
+get_expr <- function(obj, features, cells) {
+  
+  features <- intersect(features, rownames(obj))
+  cells <- intersect(cells, colnames(obj))
+  
+  try_layer <- function(layer_name) {
+    
+    tryCatch({
+      
+      M <- Seurat::FetchData(
+        obj,
+        vars = features,
+        cells = cells,
+        layer = layer_name
+      )
+      
+      if (is.null(M) || !nrow(M)) {
+        return(NULL)
+      }
+      
+      df <- as.data.frame(
+        M,
+        stringsAsFactors = FALSE
+      )
+      
+      df$cell <- rownames(M)
+      
+      df
+      
+    }, error = function(e) NULL)
+  }
+  
+  try_slot <- function(slot_name) {
+    
+    tryCatch({
+      
+      mat <- Seurat::GetAssayData(
+        obj,
+        slot = slot_name
+      )
+      
+      if (is.null(mat)) {
+        return(NULL)
+      }
+      
+      feats_here <- intersect(
+        features,
+        rownames(mat)
+      )
+      
+      cells_here <- intersect(
+        cells,
+        colnames(mat)
+      )
+      
+      mat2 <- as.matrix(
+        mat[
+          feats_here,
+          cells_here,
+          drop = FALSE
+        ]
+      )
+      
+      df <- as.data.frame(
+        t(mat2),
+        stringsAsFactors = FALSE
+      )
+      
+      df$cell <- colnames(mat2)
+      
+      df
+      
+    }, error = function(e) NULL)
+  }
+  
+  df <- try_layer("counts")
+  
+  if (is.null(df)) {
+    df <- try_layer("data")
+  }
+  
+  if (is.null(df)) {
+    df <- try_slot("counts")
+  }
+  
+  if (is.null(df)) {
+    df <- try_slot("data")
+  }
+  
+  if (is.null(df)) {
+    df <- try_slot("scale.data")
+  }
+  
+  df
+}
+
+pick_assay_with_signal <- function(obj,
+                                   probe_regex) {
+  
+  assays <- Seurat::Assays(obj)
+  
+  lapply(assays, function(a) {
+    
+    feats <- grep(
+      probe_regex,
+      rownames(obj[[a]]),
+      value = TRUE,
+      ignore.case = TRUE
+    )
+    
+    if (!length(feats)) {
+      return(
+        tibble(
+          assay = a,
+          n_probe_with_nonzero = 0L
+        )
+      )
+    }
+    
+    mat <- tryCatch(
+      Seurat::GetAssayData(
+        obj,
+        assay = a,
+        slot = "counts"
+      )[feats, , drop = FALSE],
+      error = function(e) NULL
+    )
+    
+    if (is.null(mat)) {
+      mat <- tryCatch(
+        Seurat::GetAssayData(
+          obj,
+          assay = a,
+          slot = "data"
+        )[feats, , drop = FALSE],
+        error = function(e) NULL
+      )
+    }
+    
+    if (is.null(mat) || !nrow(mat)) {
+      
+      tibble(
+        assay = a,
+        n_probe_with_nonzero = 0L
+      )
+      
+    } else {
+      
+      tibble(
+        assay = a,
+        n_probe_with_nonzero =
+          sum(
+            Matrix::rowSums(mat > 0) > 0
+          )
+      )
+    }
+    
+  }) %>%
+    bind_rows()
+}
+
+compute_probe_stats <- function(obj,
+                                sel_probes,
+                                label_col) {
+  
+  meta_use <- obj@meta.data %>%
+    rownames_to_column("cell") %>%
+    select(cell, !!label_col)
+  
+  colnames(meta_use) <- c(
+    "cell",
+    "cell_type_text"
+  )
+  
+  is_T <- is_T_mask(
+    meta_use$cell_type_text
+  )
+  
+  expr <- get_expr(
+    obj,
+    sel_probes,
+    cells = meta_use$cell
+  )
+  
+  if (is.null(expr) || !nrow(expr)) {
+    return(tibble())
+  }
+  
+  out <- lapply(sel_probes, function(pr) {
+    
+    v <- expr[[pr]]
+    
+    idx <- match(
+      expr$cell,
+      meta_use$cell
+    )
+    
+    y_sub <- is_T[idx]
+    
+    pos <- v >= FIXED_THRESHOLD
+    
+    N_Pos <- sum(pos, na.rm = TRUE)
+    
+    N_T_Pos <- sum(
+      pos & y_sub,
+      na.rm = TRUE
+    )
+    
+    N_nonT_Pos <- sum(
+      pos & !y_sub,
+      na.rm = TRUE
+    )
+    
+    Pct_T_in_Pos <- ifelse(
+      N_Pos > 0,
+      100 * N_T_Pos / N_Pos,
+      NA_real_
+    )
+    
+    NonT_Leak_Pct <- ifelse(
+      N_Pos > 0,
+      100 * N_nonT_Pos / N_Pos,
+      NA_real_
+    )
+    
+    A <- N_T_Pos
+    B <- sum(y_sub) - N_T_Pos
+    C <- N_nonT_Pos
+    D <- sum(!y_sub) - N_nonT_Pos
+    
+    ft <- fisher.test(
+      matrix(
+        c(A, C, B, D),
+        nrow = 2,
+        byrow = TRUE
+      ),
+      alternative = "greater"
+    )
+    
+    top_ct <- meta_use %>%
+      filter(
+        cell %in% expr$cell[pos]
+      ) %>%
+      count(
+        cell_type_text,
+        sort = TRUE
+      ) %>%
+      head(5) %>%
+      mutate(
+        tag = paste(
+          cell_type_text,
+          n,
+          sep = ":"
+        )
+      ) %>%
+      pull(tag) %>%
+      paste(collapse = ";")
+    
+    tibble(
+      Probe = pr,
+      Thr = FIXED_THRESHOLD,
+      N_Pos = N_Pos,
+      N_T_Pos = N_T_Pos,
+      N_nonT_Pos = N_nonT_Pos,
+      Pct_T_in_Pos = Pct_T_in_Pos,
+      NonT_Leak_Pct = NonT_Leak_Pct,
+      OR_T_enrich =
+        (A + 0.5) * (D + 0.5) /
+        ((B + 0.5) * (C + 0.5)),
+      Fisher_p = ft$p.value,
+      Top_Pos_CellTypes = top_ct
+    )
+    
+  }) %>%
+    bind_rows()
+  
+  if (nrow(out) > 0) {
+    out$Fisher_q <- p.adjust(
+      replace_na(out$Fisher_p, 1),
+      method = "BH"
+    )
+  }
+  
+  out
+}
+
+files <- list.files(
+  IN_DIR,
+  pattern = glob2rx(PATTERN),
+  full.names = TRUE
+)
+
+samples <- setNames(
+  lapply(files, readRDS),
+  tools::file_path_sans_ext(
+    basename(files)
+  )
+)
+
+all_stats <- list()
+
+all_possible_probes <- unique(
+  unlist(
+    lapply(samples, function(obj) {
+      
+      grep(
+        PROBE_REGEX,
+        rownames(obj),
+        value = TRUE,
+        ignore.case = TRUE
+      )
+      
+    })
+  )
+)
+
+msg(
+  "Total unique probes found across all samples: %d",
+  length(all_possible_probes)
+)
+
+for (sample_id in names(samples)) {
+  
+  obj <- samples[[sample_id]]
+  
+  msg("---- Sample: %s ----",
+      sample_id)
+  
+  assay_scan <- pick_assay_with_signal(
+    obj,
+    PROBE_REGEX
+  )
+  
+  best_assay <- if (
+    nrow(assay_scan) &&
+    any(
+      assay_scan$n_probe_with_nonzero > 0
+    )
+  ) {
+    assay_scan$assay[
+      which.max(
+        assay_scan$n_probe_with_nonzero
+      )
+    ]
+  } else {
+    DefaultAssay(obj)
+  }
+  
+  DefaultAssay(obj) <- best_assay
+  
+  label_col <- find_text_label_col(
+    obj@meta.data
+  )
+  
+  n_t_total <- sum(
+    obj@meta.data[[label_col]] == "T/NK Cells"
+  )
+  
+  msg(
+    "  Total T/NK cells in sample: %d",
+    n_t_total
+  )
+  
+  sel_probes <- intersect(
+    all_possible_probes,
+    rownames(obj)
+  )
+  
+  probe_stats <- compute_probe_stats(
+    obj,
+    sel_probes,
+    label_col
+  )
+  
+  all_stats[[sample_id]] <-
+    probe_stats %>%
+    mutate(
+      Sample = sample_id
+    ) %>%
+    select(
+      Sample,
+      everything()
+    )
+  
+  write_csv(
+    probe_stats,
+    file.path(
+      OUT_DIR,
+      paste0(
+        sample_id,
+        "_probe_table.csv"
+      )
+    )
+  )
+  
+}
+
+combined_stats <- bind_rows(
+  all_stats
+)
+
+msg(
+  "Calculating Cross-Sample SNR..."
+)
+
+cross_metrics <- combined_stats %>%
+  mutate(
+    Probe_Prefix =
+      str_extract(
+        Probe,
+        "P\\d+"
+      ),
+    Sample_Prefix =
+      str_extract(
+        Sample,
+        "P\\d+"
+      ),
+    Is_Home =
+      Probe_Prefix == Sample_Prefix
+  ) %>%
+  group_by(Probe) %>%
+  summarize(
+    Home_T_Pos =
+      sum(
+        N_T_Pos[Is_Home],
+        na.rm = TRUE
+      ),
+    Max_Away_T_Pos =
+      max(
+        c(0,
+          N_T_Pos[!Is_Home]),
+        na.rm = TRUE
+      ),
+    Max_Away_Sample =
+      paste(
+        unique(
+          Sample[!Is_Home][
+            N_T_Pos[!Is_Home] ==
+              max(
+                c(
+                  0,
+                  N_T_Pos[!Is_Home]
+                ),
+                na.rm = TRUE
+              )
+          ]
+        ),
+        collapse = ";"
+      ),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    SNR =
+      Home_T_Pos /
+      (Max_Away_T_Pos + 1)
+  )
+
+combined_stats <- combined_stats %>%
+  left_join(
+    cross_metrics,
+    by = "Probe"
+  )
+
+write_csv(
+  combined_stats,
+  file.path(
+    OUT_DIR,
+    "probe_table_all_samples_with_SNR.csv"
+  )
+)
+
+
+msg(
+  "SUCCESS: %d probes written.",
+  nrow(combined_stats)
+)
