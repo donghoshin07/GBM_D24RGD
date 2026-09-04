@@ -113,7 +113,7 @@ clone_levels <- c("Small", "Medium", "Large", "Hyperexpanded")
 # Data loading and cacheing
 # ============================================================
 
-TRB <- repLoad("../input/TCR/patient")
+TRB <- repLoad("../../input/TCR/patient")
 
 TRB$meta <- TRB$meta %>%
   mutate(
