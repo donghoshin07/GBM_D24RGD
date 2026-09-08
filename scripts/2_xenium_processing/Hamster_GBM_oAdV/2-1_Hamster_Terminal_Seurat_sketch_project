@@ -86,11 +86,7 @@ slide_tag <- "0028488_Region_1"
   candidates <- c(
     "cell_id",
     "cellid",
-    "cell",
-    "cell_idx",
-    "cell_index",
-    "object_id",
-    "id"
+    "cell"
   )
 
   found <- intersect(candidates, colnames(df))
@@ -305,14 +301,6 @@ obj <- FindVariableFeatures(
   verbose = FALSE
 )
 
-saveRDS(
-  obj,
-  file.path(
-    output_dir,
-    "checkpoint_A_norm_hvg.rds"
-  )
-)
-
 # Sketch + SCTransform
 obj <- SketchData(
   object = obj,
@@ -353,14 +341,6 @@ obj <- FindClusters(
   obj,
   resolution = 0.2,
   verbose = FALSE
-)
-
-saveRDS(
-  obj,
-  file.path(
-    output_dir,
-    "checkpoint_B_sketch_clusters.rds"
-  )
 )
 
 # Project To Full Dataset
