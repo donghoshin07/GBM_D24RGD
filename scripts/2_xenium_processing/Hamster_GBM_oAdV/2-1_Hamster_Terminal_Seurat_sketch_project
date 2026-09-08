@@ -1,0 +1,455 @@
+options(future.globals.maxSize = 8000 * 1024^2)
+set.seed(28488)
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(patchwork)
+})
+
+# Paths
+# Set actual path!
+slide_dir <- 
+
+outs_path <- file.path(slide_dir, "outs")
+spot_dir  <- file.path(slide_dir, "Spot Segmentation")
+
+output_dir <- "analysis_output_hamster_terminal_28488"
+plot_dir   <- "analysis_plots_hamster_terminal_28488"
+
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+dir.create(plot_dir, recursive = TRUE, showWarnings = FALSE)
+
+slide_tag <- "0028488_Region_1"
+
+# Helper Functions
+.standardize_names <- function(nm) {
+  nm <- iconv(nm, from = "", to = "UTF-8", sub = "")
+  nm <- trimws(nm)
+  nm <- tolower(nm)
+  nm <- gsub("[^a-z0-9]+", "_", nm)
+  nm <- gsub("^_|_$", "", nm)
+  nm
+}
+
+.detect_delim <- function(fp) {
+
+  con <- file(fp, open = "r", encoding = "UTF-8")
+  on.exit(close(con), add = TRUE)
+
+  line <- ""
+
+  repeat {
+
+    line <- suppressWarnings(
+      readLines(con, n = 1, warn = FALSE)
+    )
+
+    if (length(line) == 0) break
+    if (!startsWith(line, "#")) break
+  }
+
+  if (length(line) == 0 || nchar(line) == 0) return(",")
+
+  commas <- stringr::str_count(line, ",")
+  semis  <- stringr::str_count(line, ";")
+
+  if (semis > commas) ";" else ","
+}
+
+.read_cells_stats_one <- function(fp, spot_id) {
+
+  delim <- .detect_delim(fp)
+
+  df <- tryCatch(
+    readr::read_delim(
+      fp,
+      delim = delim,
+      comment = "#",
+      show_col_types = FALSE,
+      trim_ws = TRUE
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(df)) {
+    message("Failed reading: ", fp)
+    return(NULL)
+  }
+
+  colnames(df) <- .standardize_names(colnames(df))
+
+  candidates <- c(
+    "cell_id",
+    "cellid",
+    "cell",
+    "cell_idx",
+    "cell_index",
+    "object_id",
+    "id"
+  )
+
+  found <- intersect(candidates, colnames(df))
+
+  if (length(found) == 0) {
+    message("Could not identify cell ID column in: ", basename(fp))
+    message("Columns detected:")
+    print(colnames(df))
+    return(NULL)
+  }
+
+  cid <- found[1]
+
+  df %>%
+    dplyr::select(cell_id = all_of(cid)) %>%
+    dplyr::mutate(spot_id = as.character(spot_id))
+}
+
+# Parse Spot Metadata
+parse_spot_annotations <- function(spot_ids) {
+
+  condition <- case_when(
+    grepl("^RGDOX-", spot_ids, ignore.case = TRUE) ~ "RGDOX",
+    grepl("^RGD-",   spot_ids, ignore.case = TRUE) ~ "RGD",
+    grepl("^PBS-",   spot_ids, ignore.case = TRUE) ~ "PBS",
+    TRUE ~ NA_character_
+  )
+
+  hamster_id <- stringr::str_extract(
+    spot_ids,
+    "(?<=-)[0-9]+"
+  )
+
+  region <- case_when(
+    grepl("_1$", spot_ids) ~ "1",
+    grepl("_2$", spot_ids) ~ "2",
+    grepl("_NT$", spot_ids, ignore.case = TRUE) ~ "NT",
+    grepl("_border$", spot_ids, ignore.case = TRUE) ~ "border",
+    TRUE ~ "main"
+  )
+
+  tibble(
+    spot_id   = spot_ids,
+    Condition = condition,
+    HamsterID = hamster_id,
+    Region    = region
+  )
+}
+
+# Attach Spot Metadata to Seurat Object
+attach_spot_ids_to_obj <- function(obj, slide_tag, spot_dir) {
+
+  files <- list.files(
+    spot_dir,
+    pattern = "_cells_stats\\.csv$",
+    full.names = TRUE
+  )
+
+  if (length(files) == 0) {
+    stop("No *_cells_stats.csv files found.")
+  }
+
+  df_list <- lapply(
+    files,
+    function(fp) {
+
+      spot_name <- sub(
+        "_cells_stats\\.csv$",
+        "",
+        basename(fp)
+      )
+
+      .read_cells_stats_one(
+        fp,
+        spot_id = spot_name
+      )
+    }
+  )
+
+  df_list <- df_list[
+    !vapply(df_list, is.null, logical(1))
+  ]
+
+  spot_map <- bind_rows(df_list)
+
+  if (nrow(spot_map) == 0) {
+    stop("No valid cell mappings found.")
+  }
+
+  spot_map <- spot_map %>%
+    mutate(
+      cell_key = paste0(
+        slide_tag,
+        "_",
+        as.character(cell_id)
+      )
+    ) %>%
+    distinct(cell_key, .keep_all = TRUE)
+
+  idx <- intersect(
+    spot_map$cell_key,
+    colnames(obj)
+  )
+
+  cat("Matched cells:", length(idx), "\n")
+
+  vec <- setNames(
+    spot_map$spot_id[match(idx, spot_map$cell_key)],
+    idx
+  )
+
+  obj <- AddMetaData(
+    obj,
+    metadata = vec,
+    col.name = "spot_id"
+  )
+
+  ann <- parse_spot_annotations(
+    unique(spot_map$spot_id)
+  )
+
+  map <- tibble(
+    cell_key = colnames(obj),
+    spot_id  = obj$spot_id
+  ) %>%
+    left_join(
+      ann,
+      by = "spot_id"
+    )
+
+  df <- data.frame(
+    row.names = map$cell_key,
+    Condition = map$Condition,
+    HamsterID = map$HamsterID,
+    Region    = map$Region,
+    stringsAsFactors = FALSE
+  )
+
+  obj <- AddMetaData(
+    obj,
+    metadata = df
+  )
+
+  obj
+}
+
+# Load Xenium
+stopifnot(dir.exists(outs_path))
+
+obj <- suppressWarnings(
+  LoadXenium(
+    data.dir = outs_path,
+    fov = "fov"
+  )
+)
+
+obj$orig.ident <- slide_tag
+
+colnames(obj) <- paste(
+  slide_tag,
+  colnames(obj),
+  sep = "_"
+)
+
+# Attach Metadata
+obj <- attach_spot_ids_to_obj(
+  obj,
+  slide_tag = slide_tag,
+  spot_dir = spot_dir
+)
+
+cat("Total cells loaded:", ncol(obj), "\n")
+
+print(
+  obj@meta.data %>%
+    count(Condition, Region)
+)
+
+# Exclude NT Regions and Keep PBS/RGD Only
+obj <- subset(
+  obj,
+  subset =
+    Condition %in% c("PBS", "RGD") &
+    Region != "NT"
+)
+
+cat("Cells after PBS/RGD filtering and NT exclusion:", ncol(obj), "\n")
+
+print(
+  obj@meta.data %>%
+    count(Condition)
+)
+
+# QC
+obj <- subset(
+  obj,
+  subset = nCount_Xenium >= 10
+)
+
+cat("Cells after QC:", ncol(obj), "\n")
+
+# Normalization
+DefaultAssay(obj) <- "Xenium"
+
+obj <- NormalizeData(
+  obj,
+  verbose = FALSE
+)
+
+obj <- FindVariableFeatures(
+  obj,
+  verbose = FALSE
+)
+
+saveRDS(
+  obj,
+  file.path(
+    output_dir,
+    "checkpoint_A_norm_hvg.rds"
+  )
+)
+
+# Sketch + SCTransform
+obj <- SketchData(
+  object = obj,
+  ncells = 50000,
+  method = "LeverageScore",
+  sketched.assay = "sketch"
+)
+
+DefaultAssay(obj) <- "sketch"
+
+obj <- SCTransform(
+  obj,
+  assay = "sketch",
+  vst.flavor = "v2",
+  verbose = FALSE
+)
+
+obj <- RunPCA(
+  obj,
+  verbose = FALSE
+)
+
+obj <- RunUMAP(
+  obj,
+  reduction = "pca",
+  dims = 1:30,
+  return.model = TRUE
+)
+
+obj <- FindNeighbors(
+  obj,
+  reduction = "pca",
+  dims = 1:30,
+  verbose = FALSE
+)
+
+obj <- FindClusters(
+  obj,
+  resolution = 0.2,
+  verbose = FALSE
+)
+
+saveRDS(
+  obj,
+  file.path(
+    output_dir,
+    "checkpoint_B_sketch_clusters.rds"
+  )
+)
+
+# Project To Full Dataset
+DefaultAssay(obj) <- "Xenium"
+
+obj <- ProjectData(
+  object             = obj,
+  assay              = "Xenium",
+  full.reduction     = "pca.full",
+  sketched.assay     = "sketch",
+  sketched.reduction = "pca",
+  umap.model         = "umap",
+  dims               = 1:30,
+  refdata            = list(
+    cluster_full = "seurat_clusters"
+  )
+)
+
+stopifnot("full.umap" %in% names(obj@reductions))
+
+obj$cluster_full <- factor(obj$cluster_full)
+
+# Differential Expression
+DefaultAssay(obj) <- "sketch"
+
+Idents(obj) <- "Condition"
+
+markers_RGD_vs_PBS <- FindMarkers(
+  obj,
+  ident.1 = "RGD",
+  ident.2 = "PBS",
+  only.pos = FALSE,
+  min.pct = 0.1,
+  logfc.threshold = 0.1
+)
+
+write.csv(
+  markers_RGD_vs_PBS,
+  file.path(
+    output_dir,
+    "Markers_RGD_vs_PBS.csv"
+  )
+)
+
+# Sample Summaries
+hamster_summary <- obj@meta.data %>%
+  count(
+    Condition,
+    HamsterID
+  )
+
+write.csv(
+  hamster_summary,
+  file.path(
+    output_dir,
+    "Hamster_Summary.csv"
+  ),
+  row.names = FALSE
+)
+
+spot_summary <- obj@meta.data %>%
+  count(
+    Condition,
+    HamsterID,
+    Region
+  )
+
+write.csv(
+  spot_summary,
+  file.path(
+    output_dir,
+    "Spot_Summary.csv"
+  ),
+  row.names = FALSE
+)
+
+# Save Final Object
+saveRDS(
+  obj,
+  file.path(
+    output_dir,
+    "Hamster_Terminal_0028488_Final.rds"
+  )
+)
+
+write.csv(
+  obj@meta.data,
+  file.path(
+    output_dir,
+    "Hamster_Terminal_0028488_Metadata.csv"
+  )
+)
