@@ -1,0 +1,254 @@
+options(future.globals.maxSize = 8000 * 1024^2)
+set.seed(28500)
+
+suppressPackageStartupMessages({
+  library(Seurat)
+  library(ggplot2)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(stringr)
+  library(patchwork)
+})
+
+# 0) Paths
+# Set actual path!
+slide_dir <- 
+outs_path <- file.path(slide_dir, "outs")
+spot_dir  <- file.path(slide_dir, "Spot Segmentation")
+
+output_dir <- "analysis_output_hamster_early_28500"
+plot_dir   <- "analysis_plots_hamster_early_28500"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(plot_dir,   showWarnings = FALSE, recursive = TRUE)
+
+slide_tag <- "0028500_Region_1"
+
+# 1) Helper functions (ASCII-safe)
+.standardize_names <- function(nm) {
+  nm <- iconv(nm, from = "", to = "UTF-8", sub = "")
+  nm <- trimws(nm)
+  nm <- tolower(nm)
+  nm <- gsub("[^a-z0-9]+", "_", nm)
+  nm <- gsub("^_|_$", "", nm)
+  nm
+}
+
+.detect_delim <- function(fp) {
+  con <- file(fp, open = "r", encoding = "UTF-8")
+  on.exit(close(con), add = TRUE)
+  line <- ""
+  repeat {
+    line <- suppressWarnings(readLines(con, n = 1, warn = FALSE))
+    if (length(line) == 0) break
+    if (!startsWith(line, "#")) break
+  }
+  if (length(line) == 0 || nchar(line) == 0) return(",")
+  commas <- stringr::str_count(line, ",")
+  semis  <- stringr::str_count(line, ";")
+  if (semis > commas) ";" else ","
+}
+
+# Read a *_cells_stats.csv -> tibble(cell_id, spot_id)
+.read_cells_stats_one <- function(fp, spot_id) {
+  delim <- .detect_delim(fp)
+  df <- tryCatch(
+    readr::read_delim(fp, delim = delim, comment = "#", show_col_types = FALSE,
+                      locale = locale(encoding = "UTF-8"), trim_ws = TRUE),
+    error = function(e) NULL
+  )
+  if (is.null(df)) {
+    if (delim == ",") {
+      df <- tryCatch(read.csv(fp, comment.char = "#", check.names = FALSE), error = function(e) NULL)
+    } else {
+      df <- tryCatch(read.delim(fp, sep = ";", comment.char = "#", check.names = FALSE), error = function(e) NULL)
+    }
+    if (!is.null(df)) df <- tibble::as_tibble(df)
+  }
+  if (is.null(df)) {
+    message("  Could not read: ", fp)
+    return(NULL)
+  }
+  colnames(df) <- .standardize_names(colnames(df))
+
+  # Accept cell id column names
+  candidates <- c("cell_id","cell")
+  found <- intersect(candidates, colnames(df))
+  if (length(found) == 0) {
+    message("  Could not find a cell id column in: ", fp)
+    message("  First columns seen: ", paste(head(colnames(df), 8), collapse = ", "))
+    return(NULL)
+  }
+  cid <- found[1]
+  df %>%
+    dplyr::select(cell_id = all_of(cid)) %>%
+    dplyr::mutate(spot_id = as.character(spot_id))
+}
+
+# Parse Condition and TimeGroup from spot_id
+parse_spot_annotations <- function(spot_ids) {
+  s <- trimws(spot_ids)
+
+  cond <- ifelse(grepl("\\bNT\\b", s, ignore.case = TRUE), "NT",
+          ifelse(grepl("\\bPBS\\b", s, ignore.case = TRUE), "PBS",
+          ifelse(grepl("\\bRGD\\b", s, ignore.case = TRUE), "RGD", NA_character_)))
+
+  tg_raw <- toupper(str_extract(s, "\\bG[1-4]\\b"))
+  tg <- ifelse(cond %in% c("PBS","RGD"), tg_raw, NA_character_)
+
+  tibble::tibble(
+    spot_id = spot_ids,
+    Condition = cond,
+    TimeGroup = tg,
+  )
+}
+
+# Attach spot_id + derived annotations
+attach_spot_ids_to_obj <- function(obj, slide_tag, spot_dir) {
+  if (!dir.exists(spot_dir)) {
+    message("No Spot Segmentation directory at: ", spot_dir)
+    return(obj)
+  }
+  files <- list.files(spot_dir, pattern = "_cells_stats\\.csv$", full.names = TRUE)
+  if (length(files) == 0) {
+    message("No *_cells_stats.csv files under: ", spot_dir)
+    return(obj)
+  }
+
+  df_cells <- lapply(files, function(fp) {
+    base <- sub("_cells_stats\\.csv$", "", basename(fp))  # may include spaces
+    .read_cells_stats_one(fp, spot_id = base)
+  })
+  df_cells <- df_cells[!vapply(df_cells, is.null, logical(1))]
+  spot_map <- dplyr::bind_rows(df_cells)
+  if (nrow(spot_map) == 0) {
+    message("Parsed 0 rows from cells_stats in: ", spot_dir)
+    return(obj)
+  }
+
+  spot_map <- spot_map %>%
+    mutate(cell_key = paste0(slide_tag, "_", as.character(cell_id))) %>%
+    distinct(cell_key, .keep_all = TRUE)
+
+  idx <- intersect(spot_map$cell_key, colnames(obj))
+  if (length(idx) == 0) {
+    message("Spot Segmentation parsed but 0 cells matched colnames in Seurat object.")
+    return(obj)
+  }
+
+  vec <- setNames(spot_map$spot_id[match(idx, spot_map$cell_key)], idx)
+  obj <- AddMetaData(obj, metadata = vec, col.name = "spot_id")
+  cat("Attached spot_id to", length(idx), "cells.\n")
+
+  # Derive annotations and attach
+  ann_spot <- parse_spot_annotations(unique(spot_map$spot_id))
+  map <- tibble::tibble(cell_key = colnames(obj), spot_id = obj$spot_id) %>%
+    left_join(ann_spot, by = "spot_id")
+  df <- data.frame(
+    row.names = map$cell_key,
+    Condition = map$Condition,
+    TimeGroup = map$TimeGroup,
+    stringsAsFactors = FALSE
+  )
+  obj <- AddMetaData(obj, df)
+  obj
+}
+
+# 2) Load slide 0028500_Region_1, attach spot labels
+stopifnot(dir.exists(outs_path))
+obj <- suppressWarnings(LoadXenium(data.dir = outs_path, fov = "fov"))
+obj$orig.ident <- slide_tag
+
+# Unique cell names prefixed with slide tag
+colnames(obj) <- paste(slide_tag, colnames(obj), sep = "_")
+
+# Attach: spot_id, Condition, TimeGroup
+obj <- attach_spot_ids_to_obj(obj, slide_tag = slide_tag, spot_dir = spot_dir)
+
+# Quick report
+md <- obj@meta.data
+cat("Total cells in slide:", nrow(md), "\n")
+cat("Cells with spot_id:", sum(!is.na(md$spot_id)), "\n")
+cat("Unique spots:", n_distinct(md$spot_id[!is.na(md$spot_id)]), "\n")
+print(md %>% count(Condition, TimeGroup, name = "cells") %>% arrange(Condition, TimeGroup))
+
+# 3) QC
+obj <- subset(obj, subset = nCount_Xenium >= 10)
+cat("Cells after QC:", ncol(obj), "\n")
+
+# 4) Normalize/Reduce/Cluster with Sketch -> UMAP on sketch (model) -> ProjectData
+DefaultAssay(obj) <- "Xenium"
+obj <- NormalizeData(obj, verbose = FALSE)
+obj <- FindVariableFeatures(obj, verbose = FALSE)
+
+# Sketch for speed
+obj <- SketchData(object = obj, ncells = 50000, method = "LeverageScore", sketched.assay = "sketch")
+stopifnot("sketch" %in% names(obj@assays))
+
+# Work on sketch
+DefaultAssay(obj) <- "sketch"
+obj <- SCTransform(obj, assay = "sketch", vst.flavor = "v2", verbose = FALSE)
+obj <- RunPCA(obj, verbose = FALSE)
+stopifnot("pca" %in% names(obj@reductions))
+
+# UMAP on sketch with return.model = TRUE using reduction "pca" (creates "umap")
+obj <- RunUMAP(obj, reduction = "pca", dims = 1:30, return.model = TRUE)
+stopifnot("umap" %in% names(obj@reductions))
+stopifnot(!is.null(obj@reductions$umap@misc$model))
+
+# Neighbors/clusters on sketch
+obj <- FindNeighbors(obj, reduction = "pca", dims = 1:30, verbose = FALSE)
+obj <- FindClusters(obj, resolution = 0.15, verbose = FALSE)
+
+# Project sketch -> full data (creates "pca.full" and "full.umap" if absent)
+DefaultAssay(obj) <- "Xenium"
+obj <- ProjectData(
+  object             = obj,
+  assay              = "Xenium",
+  full.reduction     = "pca.full",
+  sketched.assay     = "sketch",
+  sketched.reduction = "pca",
+  umap.model         = "umap",
+  dims               = 1:30,
+  refdata            = list(cluster_full = "seurat_clusters")
+)
+
+# ASSERT: projected reductions exist
+stopifnot("pca.full" %in% names(obj@reductions))
+stopifnot("full.umap" %in% names(obj@reductions))
+
+# 4.5) GUARDS before plotting: NA-safe fields + "no drop" assertion
+# NA-safe plotting metadata
+obj$Condition_plot <- ifelse(is.na(obj$Condition), "Unknown", obj$Condition)
+obj$TimeGroup_plot <- ifelse(is.na(obj$TimeGroup), "NA", obj$TimeGroup)
+
+# Identity safety
+obj$cluster_full <- as.character(obj$cluster_full)
+obj$cluster_full[is.na(obj$cluster_full)] <- "unassigned"
+obj$cluster_full <- factor(obj$cluster_full)
+Idents(obj) <- "cluster_full"
+
+# Assert: every cell has UMAP coords
+stopifnot(nrow(Embeddings(obj, "full.umap")) == ncol(obj))
+
+# 7) Summaries & Save
+spot_counts <- obj@meta.data %>%
+  mutate(Condition = ifelse(is.na(Condition), "Unknown", Condition),
+         TimeGroup = ifelse(is.na(TimeGroup), "NA", TimeGroup)) %>%
+  count(Condition, TimeGroup, spot_id, name = "cells") %>%
+  arrange(Condition, TimeGroup, desc(cells))
+write.csv(spot_counts, file.path(output_dir, "Spot_Cell_Counts_28500.csv"), row.names = FALSE)
+
+for (red in c("pca","umap","pca.full","full.umap")) {
+  if (red %in% names(obj@reductions)) {
+    cat(sprintf("Reduction %-10s cells: %d\n", red, nrow(Embeddings(obj, red))))
+  }
+}
+cat("NA Condition:", sum(is.na(obj$Condition)),
+    " | NA TimeGroup:", sum(is.na(obj$TimeGroup)),
+    " | Missing spot_id:", sum(is.na(obj$spot_id)), "\n")
+stopifnot(nrow(Embeddings(obj, "full.umap")) == ncol(obj))
+
+saveRDS(obj, file.path(output_dir, "Hamster_TMA_0028500_Final.rds"))
+write.csv(obj@meta.data, file.path(output_dir, "Hamster_TMA_0028500_Metadata.csv"))
+
